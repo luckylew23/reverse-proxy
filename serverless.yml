@@ -1,0 +1,38 @@
+component: scf
+name: reverse-proxy
+
+inputs:
+  name: reverse-proxy
+  src:
+    src: ./
+    exclude:
+      - .env*
+      - node_modules/**
+      - api/**
+      - functions/**
+      - test/**
+      - .git/**
+      - README.md
+      - wrangler.toml
+      - vercel.json
+  handler: scf/index.main_handler
+  runtime: Nodejs16.13
+  region: ap-guangzhou
+  timeout: 30
+  memorySize: 128
+  environment:
+    variables:
+      # 通过腾讯云控制台设置更安全的，不要硬编码在这里
+      # TARGET_BASE_URL: https://your-backend.vercel.app
+      NODE_ENV: production
+  events:
+    - apigw:
+        parameters:
+          protocols:
+            - https
+            - http
+          environment: release
+          endpoints:
+            - path: /{proxy+}
+              method: ANY
+              integratedResp: true
