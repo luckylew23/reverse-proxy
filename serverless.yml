@@ -15,8 +15,8 @@ inputs:
       - README.md
       - wrangler.toml
       - vercel.json
-  handler: scf/index.main_handler
-  runtime: Nodejs16.13
+  handler: scf-python/index.main_handler
+  runtime: Python3.10
   region: ap-guangzhou
   timeout: 30
   memorySize: 128
