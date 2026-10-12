@@ -105,6 +105,14 @@ def main_handler(event, context):
                 # 添加 CORS 头
                 response_headers.update(get_cors_headers())
 
+                # 确保 content-type 存在（防止 SCF 平台自动加 content-disposition）
+                if 'content-type' not in response_headers and 'Content-Type' not in response_headers:
+                    response_headers['content-type'] = 'text/plain; charset=utf-8'
+
+                # 强制移除 content-disposition（SCF 平台可能自动添加，导致浏览器下载）
+                response_headers.pop('content-disposition', None)
+                response_headers.pop('Content-Disposition', None)
+
                 # 判断是否为文本
                 content_type = response_headers.get('content-type', '')
                 is_text = any(t in content_type for t in [
@@ -134,6 +142,12 @@ def main_handler(event, context):
                     # HTML 响应保持 text/html 不变
                     if 'application/json' in content_type:
                         response_headers['content-type'] = 'text/plain; charset=utf-8'
+                    elif 'text/html' in content_type:
+                        response_headers['content-type'] = 'text/html; charset=utf-8'
+
+                    # 强制移除 content-disposition（防止浏览器下载）
+                    response_headers.pop('content-disposition', None)
+                    response_headers.pop('Content-Disposition', None)
 
                     print(f"[DEBUG] returning as text, length={len(body_str)}, content-type={response_headers.get('content-type')}")
                     return {
