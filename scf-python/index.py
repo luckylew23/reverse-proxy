@@ -129,7 +129,13 @@ def main_handler(event, context):
                 if is_text:
                     # 文本响应：直接返回，不 Base64
                     body_str = response_body.decode('utf-8', errors='replace')
-                    print(f"[DEBUG] returning as text, length={len(body_str)}")
+
+                    # 对 JSON 响应，改为 text/plain 让浏览器直接显示而非下载
+                    # HTML 响应保持 text/html 不变
+                    if 'application/json' in content_type:
+                        response_headers['content-type'] = 'text/plain; charset=utf-8'
+
+                    print(f"[DEBUG] returning as text, length={len(body_str)}, content-type={response_headers.get('content-type')}")
                     return {
                         'isBase64Encoded': False,
                         'statusCode': response.status,
