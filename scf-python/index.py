@@ -12,18 +12,8 @@ from urllib.parse import urlencode, urlparse
 
 
 def main_handler(event, context):
-    """
-    腾讯云 SCF 主处理函数
+    """腾讯云 SCF 主处理函数"""
 
-    Args:
-        event: API 网关事件对象
-        context: 函数上下文
-
-    Returns:
-        dict: API 网关响应格式
-    """
-
-    # 获取目标后端 URL
     target_base_url = os.environ.get('TARGET_BASE_URL')
     if not target_base_url:
         return error_response(500, 'TARGET_BASE_URL environment variable is required')
@@ -62,23 +52,22 @@ def main_handler(event, context):
                 'body': ''
             }
 
-        # 准备转发请求头
+        # 准备转发请求头（统一小写 key）
         forward_headers = {}
         for key, value in headers.items():
             key_lower = key.lower()
-            # 跳过 Cloudflare 特有头和 Host 头
             if key_lower in ['host', 'cf-connecting-ip', 'cf-ray',
                             'cf-visitor', 'x-forwarded-for', 'x-forwarded-proto',
-                            'accept-encoding']:
+                            'accept-encoding', 'content-length']:
                 continue
-            forward_headers[key] = value
+            forward_headers[key_lower] = value
 
         # 设置正确的 Host 头
         parsed_url = urlparse(target_base_url)
-        forward_headers['Host'] = parsed_url.netloc
+        forward_headers['host'] = parsed_url.netloc
 
         # 不接受压缩，确保拿到原始文本
-        forward_headers['Accept-Encoding'] = 'identity'
+        forward_headers['accept-encoding'] = 'identity'
 
         # 解码 Base64 请求体（如果有）
         if body and is_base64:
@@ -96,45 +85,76 @@ def main_handler(event, context):
         try:
             with urllib.request.urlopen(req, timeout=30) as response:
                 response_body = response.read()
-                response_headers = dict(response.headers)
+                print(f"[DEBUG] response status={response.status}")
+                print(f"[DEBUG] response_body length={len(response_body)}")
+
+                # 统一构建响应头（全部用小写 key）
+                response_headers = {}
+                for key, value in response.headers.items():
+                    key_lower = key.lower()
+                    # 移除 hop-by-hop 和引起问题的头
+                    if key_lower in ['transfer-encoding', 'connection', 'content-encoding',
+                                     'content-length', 'keep-alive',
+                                     'content-disposition']:
+                        continue
+                    response_headers[key_lower] = value
+
+                # 打印实际 Content-Type
+                print(f"[DEBUG] response content-type={response_headers.get('content-type', 'MISSING')}")
 
                 # 添加 CORS 头
                 response_headers.update(get_cors_headers())
 
-                # 判断 Content-Type
-                content_type = response_headers.get('Content-Type', response_headers.get('content-type', ''))
-
-                # JSON / HTML / 文本 → 直接返回文本（不 Base64）
+                # 判断是否为文本
+                content_type = response_headers.get('content-type', '')
                 is_text = any(t in content_type for t in [
                     'text/', 'application/json', 'application/javascript',
                     'application/xml', 'application/xhtml'
                 ])
 
+                # 如果没有 Content-Type，尝试根据内容判断
+                if not content_type:
+                    try:
+                        response_body.decode('utf-8')
+                        is_text = True
+                        response_headers['content-type'] = 'application/json'
+                        print(f"[DEBUG] no content-type, detected as text")
+                    except (UnicodeDecodeError, Exception):
+                        is_text = False
+                        response_headers['content-type'] = 'application/octet-stream'
+                        print(f"[DEBUG] no content-type, detected as binary")
+
+                print(f"[DEBUG] is_text={is_text}")
+
                 if is_text:
-                    print(f"[DEBUG] response is text, content-type={content_type}")
+                    # 文本响应：直接返回，不 Base64
+                    body_str = response_body.decode('utf-8', errors='replace')
+                    print(f"[DEBUG] returning as text, length={len(body_str)}")
                     return {
                         'isBase64Encoded': False,
                         'statusCode': response.status,
                         'headers': response_headers,
-                        'body': response_body.decode('utf-8', errors='replace')
+                        'body': body_str
                     }
                 else:
-                    # 二进制数据 → Base64 编码
-                    print(f"[DEBUG] response is binary, content-type={content_type}")
+                    # 二进制响应：Base64 编码
+                    body_b64 = base64.b64encode(response_body).decode('utf-8')
+                    print(f"[DEBUG] returning as base64, length={len(body_b64)}")
                     return {
                         'isBase64Encoded': True,
                         'statusCode': response.status,
                         'headers': response_headers,
-                        'body': base64.b64encode(response_body).decode('utf-8')
+                        'body': body_b64
                     }
 
         except urllib.error.HTTPError as e:
             # HTTP 错误（如 404, 500 等）
             error_body = e.read().decode('utf-8', errors='replace') if e.fp else str(e)
+            print(f"[DEBUG] HTTPError: code={e.code}, body={error_body[:200]}")
             return {
                 'isBase64Encoded': False,
                 'statusCode': e.code,
-                'headers': {**get_cors_headers(), 'Content-Type': 'application/json'},
+                'headers': {**get_cors_headers(), 'content-type': 'application/json'},
                 'body': json.dumps({
                     'error': f'Backend returned {e.code}',
                     'message': error_body[:500]
@@ -142,18 +162,17 @@ def main_handler(event, context):
             }
 
     except Exception as e:
-        # 其他异常（网络错误、超时等）
         print(f"Proxy error: {str(e)}")
         return error_response(502, f'Proxy error: {str(e)}')
 
 
 def get_cors_headers():
-    """返回 CORS 响应头"""
+    """返回 CORS 响应头（全部小写 key）"""
     return {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
-        'Access-Control-Max-Age': '86400'
+        'access-control-allow-origin': '*',
+        'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        'access-control-allow-headers': 'Content-Type, Authorization, X-Requested-With',
+        'access-control-max-age': '86400'
     }
 
 
@@ -162,6 +181,6 @@ def error_response(status_code, message):
     return {
         'isBase64Encoded': False,
         'statusCode': status_code,
-        'headers': {**get_cors_headers(), 'Content-Type': 'application/json'},
+        'headers': {**get_cors_headers(), 'content-type': 'application/json'},
         'body': json.dumps({'error': message})
     }
