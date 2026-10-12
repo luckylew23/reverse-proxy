@@ -5,6 +5,7 @@
 """
 import json
 import os
+import base64
 import urllib.request
 import urllib.error
 from urllib.parse import urlencode, urlparse
@@ -36,12 +37,21 @@ def main_handler(event, context):
         body = event.get('body', '')
         is_base64 = event.get('isBase64Encoded', False)
 
+        # 调试日志
+        print(f"[DEBUG] httpMethod={http_method}")
+        print(f"[DEBUG] path={path}")
+        print(f"[DEBUG] queryString={query_string}")
+        print(f"[DEBUG] headers={headers}")
+        print(f"[DEBUG] target_base_url={target_base_url}")
+
         # 构建完整的目标 URL
         if query_string:
             query_params = urlencode(query_string)
             target_url = f"{target_base_url}{path}?{query_params}"
         else:
             target_url = f"{target_base_url}{path}"
+
+        print(f"[DEBUG] target_url={target_url}")
 
         # CORS 预检请求处理
         if http_method == 'OPTIONS':
@@ -58,7 +68,8 @@ def main_handler(event, context):
             key_lower = key.lower()
             # 跳过 Cloudflare 特有头和 Host 头
             if key_lower in ['host', 'cf-connecting-ip', 'cf-ray',
-                            'cf-visitor', 'x-forwarded-for', 'x-forwarded-proto']:
+                            'cf-visitor', 'x-forwarded-for', 'x-forwarded-proto',
+                            'accept-encoding']:
                 continue
             forward_headers[key] = value
 
@@ -66,9 +77,11 @@ def main_handler(event, context):
         parsed_url = urlparse(target_base_url)
         forward_headers['Host'] = parsed_url.netloc
 
+        # 不接受压缩，确保拿到原始文本
+        forward_headers['Accept-Encoding'] = 'identity'
+
         # 解码 Base64 请求体（如果有）
         if body and is_base64:
-            import base64
             body = base64.b64decode(body).decode('utf-8')
 
         # 创建请求对象
@@ -88,25 +101,43 @@ def main_handler(event, context):
                 # 添加 CORS 头
                 response_headers.update(get_cors_headers())
 
-                # 返回 Base64 编码的响应（兼容二进制数据）
-                import base64
-                return {
-                    'isBase64Encoded': True,
-                    'statusCode': response.status,
-                    'headers': response_headers,
-                    'body': base64.b64encode(response_body).decode('utf-8')
-                }
+                # 判断 Content-Type
+                content_type = response_headers.get('Content-Type', response_headers.get('content-type', ''))
+
+                # JSON / HTML / 文本 → 直接返回文本（不 Base64）
+                is_text = any(t in content_type for t in [
+                    'text/', 'application/json', 'application/javascript',
+                    'application/xml', 'application/xhtml'
+                ])
+
+                if is_text:
+                    print(f"[DEBUG] response is text, content-type={content_type}")
+                    return {
+                        'isBase64Encoded': False,
+                        'statusCode': response.status,
+                        'headers': response_headers,
+                        'body': response_body.decode('utf-8', errors='replace')
+                    }
+                else:
+                    # 二进制数据 → Base64 编码
+                    print(f"[DEBUG] response is binary, content-type={content_type}")
+                    return {
+                        'isBase64Encoded': True,
+                        'statusCode': response.status,
+                        'headers': response_headers,
+                        'body': base64.b64encode(response_body).decode('utf-8')
+                    }
 
         except urllib.error.HTTPError as e:
             # HTTP 错误（如 404, 500 等）
-            error_body = e.read().decode('utf-8') if e.fp else str(e)
+            error_body = e.read().decode('utf-8', errors='replace') if e.fp else str(e)
             return {
                 'isBase64Encoded': False,
                 'statusCode': e.code,
                 'headers': {**get_cors_headers(), 'Content-Type': 'application/json'},
                 'body': json.dumps({
                     'error': f'Backend returned {e.code}',
-                    'message': error_body[:500]  # 限制错误信息长度
+                    'message': error_body[:500]
                 })
             }
 
