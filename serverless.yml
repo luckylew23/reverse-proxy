@@ -23,7 +23,7 @@ inputs:
   environment:
     variables:
       # 通过腾讯云控制台设置更安全的，不要硬编码在这里
-      # TARGET_BASE_URL: https://your-backend.vercel.app
+     TARGET_BASE_URL: http://139.9.223.233:3000
       NODE_ENV: production
   events:
     - apigw:
